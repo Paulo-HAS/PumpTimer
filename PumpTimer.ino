@@ -9,40 +9,43 @@
 #define RELAY_PIN         12
 
 // Módulos relé comuns são ativos em nível baixo (LOW = liga).
-// Se for ativo em alto, mude para false.
+// Se o seu for ativo em alto, mude para false.
 const bool RELAY_ACTIVE_LOW = true;
 
 const unsigned long PUMP_DURATION_MS = 30UL * 60UL * 1000UL; // 30 minutos
 const unsigned long DEBOUNCE_MS = 50;
 
-enum Mode { OFF, TIMER_MODE, MANUAL_MODE };     // Estados do sistema
-Mode mode = OFF;                                // Estado atual
+// Modos: 0 = desligado, 1 = timer, 2 = manual
+#define MODE_OFF    0
+#define MODE_TIMER  1
+#define MODE_MANUAL 2
+
+int mode = MODE_OFF;
 unsigned long timerStartMs = 0;
 
-// Debounce genérico: detecta borda de subida (botão pressionado)
-struct Button {
-  uint8_t pin;
-  bool lastReading;
-  bool stableState;
-  unsigned long lastChangeMs;
-};
+// Botões: índice 0 = timer, índice 1 = manual
+const int NUM_BUTTONS = 2;
+const int BTN_TIMER = 0;
+const int BTN_MANUAL = 1;
 
-Button timerBtn  = {TIMER_BUTTON_PIN,  LOW, LOW, 0};
-Button manualBtn = {MANUAL_BUTTON_PIN, LOW, LOW, 0};
+const int buttonPins[NUM_BUTTONS] = {TIMER_BUTTON_PIN, MANUAL_BUTTON_PIN};
+bool lastReading[NUM_BUTTONS] = {LOW, LOW};
+bool stableState[NUM_BUTTONS] = {LOW, LOW};
+unsigned long lastChangeMs[NUM_BUTTONS] = {0, 0};
 
 // Retorna true uma única vez a cada aperto
-bool wasPressed(Button &b) {
+bool wasPressed(int i) {
   unsigned long now = millis();
-  bool reading = digitalRead(b.pin);
+  bool reading = digitalRead(buttonPins[i]);
 
-  if (reading != b.lastReading) {
-    b.lastChangeMs = now;
-    b.lastReading = reading;
+  if (reading != lastReading[i]) {
+    lastChangeMs[i] = now;
+    lastReading[i] = reading;
   }
 
-  if ((now - b.lastChangeMs) > DEBOUNCE_MS && reading != b.stableState) {
-    b.stableState = reading;
-    if (b.stableState == HIGH) return true;
+  if ((now - lastChangeMs[i]) > DEBOUNCE_MS && reading != stableState[i]) {
+    stableState[i] = reading;
+    if (stableState[i] == HIGH) return true;
   }
   return false;
 }
@@ -51,10 +54,10 @@ void setRelay(bool on) {
   digitalWrite(RELAY_PIN, (on == RELAY_ACTIVE_LOW) ? LOW : HIGH);
 }
 
-void setMode(Mode newMode, const char *msg) {
+void setMode(int newMode, const char *msg) {
   mode = newMode;
-  setRelay(mode != OFF);
-  if (mode == TIMER_MODE) timerStartMs = millis();
+  setRelay(mode != MODE_OFF);
+  if (mode == MODE_TIMER) timerStartMs = millis();
   Serial.println(msg);
 }
 
@@ -72,28 +75,28 @@ void setup() {
 }
 
 void loop() {
-  bool timerPressed  = wasPressed(timerBtn);
-  bool manualPressed = wasPressed(manualBtn);
+  bool timerPressed  = wasPressed(BTN_TIMER);
+  bool manualPressed = wasPressed(BTN_MANUAL);
 
   // --- Botão manual ---
   if (manualPressed) {
-    if (mode == MANUAL_MODE) {
-      setMode(OFF, "Manual: bomba DESLIGADA");
+    if (mode == MODE_MANUAL) {
+      setMode(MODE_OFF, "Manual: bomba DESLIGADA");
     } else {
-      setMode(MANUAL_MODE, "Manual: bomba LIGADA");
+      setMode(MODE_MANUAL, "Manual: bomba LIGADA");
     }
   }
   // --- Botão do timer (ignorado no modo manual) ---
-  else if (timerPressed && mode != MANUAL_MODE) {
-    if (mode == TIMER_MODE) {
-      setMode(OFF, "Timer: cancelado, bomba DESLIGADA");
+  else if (timerPressed && mode != MODE_MANUAL) {
+    if (mode == MODE_TIMER) {
+      setMode(MODE_OFF, "Timer: cancelado, bomba DESLIGADA");
     } else {
-      setMode(TIMER_MODE, "Timer: bomba LIGADA");
+      setMode(MODE_TIMER, "Timer: bomba LIGADA");
     }
   }
 
   // --- Fim da contagem do timer ---
-  if (mode == TIMER_MODE && (millis() - timerStartMs >= PUMP_DURATION_MS)) {
-    setMode(OFF, "Timer: tempo esgotado, bomba DESLIGADA");
+  if (mode == MODE_TIMER && (millis() - timerStartMs >= PUMP_DURATION_MS)) {
+    setMode(MODE_OFF, "Timer: tempo esgotado, bomba DESLIGADA");
   }
 }
