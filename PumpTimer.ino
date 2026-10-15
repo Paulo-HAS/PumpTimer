@@ -1,73 +1,80 @@
 #include <Arduino.h>
+// Timer para bomba d'água com ESP32
+// Botão: inicia o timer; apertar de novo durante a contagem cancela.
 
-// Ajuste estes pinos conforme a sua montagem.
-const uint8_t BUTTON_PIN = 19;
-const uint8_t RELAY_PIN = 18;
+#define BUTTON_PIN 8     // botão entre o pino e GND (usa pull-up interno)
+#define RELAY_PIN 12     // sinal do módulo relé
 
-// Edite este valor para alterar a duracao do timer.(UL = Unsigned Long)
-const unsigned long TIMER_DURATION_MS = 15UL * 60UL * 1000UL;
-
-// Muitos modulos de rele acionam com nivel LOW. Mude para false se o seu
-// modulo acionar com nivel HIGH.
+// Módulos relé comuns são ativos em nível baixo (LOW = liga).
+// Se o seu for ativo em alto, mude para false.
 const bool RELAY_ACTIVE_LOW = true;
 
+const unsigned long PUMP_DURATION_MS = 15UL * 60UL * 1000UL; // 15 minutos
 const unsigned long DEBOUNCE_MS = 40;
 
-bool pumpRunning = false;
-unsigned long pumpStartedAt = 0;
+bool pumpOn = false;
+unsigned long pumpStartMs = 0;
 
-bool lastRawButtonState = HIGH;
-bool stableButtonState = HIGH;
-unsigned long lastButtonChangeAt = 0;
+bool lastReading = HIGH;
+bool stableState = HIGH;
+unsigned long lastChangeMs = 0;
 
-void setPump(bool enabled) {
-  pumpRunning = enabled;
-  const uint8_t onLevel = RELAY_ACTIVE_LOW ? LOW : HIGH;
-  const uint8_t offLevel = RELAY_ACTIVE_LOW ? HIGH : LOW;
-  digitalWrite(RELAY_PIN, enabled ? onLevel : offLevel);
+void setRelay(bool on) {
+  digitalWrite(RELAY_PIN, (on == RELAY_ACTIVE_LOW) ? LOW : HIGH);
+}
+
+void startPump() {
+  pumpOn = true;
+  pumpStartMs = millis();
+  setRelay(true);
+  Serial.println("Bomba LIGADA");
+}
+
+void stopPump(const char *motivo) {
+  pumpOn = false;
+  setRelay(false);
+  Serial.print("Bomba DESLIGADA (");
+  Serial.print(motivo);
+  Serial.println(")");
 }
 
 void setup() {
   Serial.begin(115200);
 
-  // Define o estado desligado antes de habilitar a saida do rele.
+  // Define o nível de desligado ANTES de configurar como saída,
+  // para evitar pulso indesejado no relé.
   digitalWrite(RELAY_PIN, RELAY_ACTIVE_LOW ? HIGH : LOW);
-  // Configura os pinos de entrada e saida.
   pinMode(RELAY_PIN, OUTPUT);
-  pinMode(BUTTON_PIN, INPUT_PULLUP);
-  setPump(false);
+  setRelay(false);
 
-  Serial.println("Controlador da bomba pronto.");
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
 }
 
 void loop() {
-  const unsigned long now = millis();
-  const bool rawButtonState = digitalRead(BUTTON_PIN);
+  unsigned long now = millis();
 
-  if (rawButtonState != lastRawButtonState) {
-    lastRawButtonState = rawButtonState;
-    lastButtonChangeAt = now;
+  // --- Leitura do botão com debounce ---
+  bool reading = digitalRead(BUTTON_PIN);
+  if (reading != lastReading) {
+    lastChangeMs = now;
+    lastReading = reading;
   }
 
-  if ((now - lastButtonChangeAt) >= DEBOUNCE_MS &&
-      rawButtonState != stableButtonState) {
-    stableButtonState = rawButtonState;
+  if ((now - lastChangeMs) > DEBOUNCE_MS && reading != stableState) {
+    stableState = reading;
 
-    // O botao usa INPUT_PULLUP: pressionado corresponde a LOW.
-    if (stableButtonState == LOW) {
-      if (pumpRunning) {
-        setPump(false);
-        Serial.println("Bomba desligada pelo botao.");
+    // Ação na borda de subida (botão pressionado)
+    if (stableState == HIGH) {
+      if (pumpOn) {
+        stopPump("cancelado pelo botão");
       } else {
-        pumpStartedAt = now;
-        setPump(true);
-        Serial.println("Bomba ligada; timer iniciado.");
+        startPump();
       }
     }
   }
 
-  if (pumpRunning && (now - pumpStartedAt) >= TIMER_DURATION_MS) {
-    setPump(false);
-    Serial.println("Timer encerrado; bomba desligada.");
+  // --- Fim da contagem ---
+  if (pumpOn && (now - pumpStartMs >= PUMP_DURATION_MS)) {
+    stopPump("tempo esgotado");
   }
 }
